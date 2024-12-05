@@ -17,6 +17,7 @@ intents.guilds = True
 
 async def cog_loader(bot_instance: commands.Bot) -> None:
     """This function loads all cogs in the cogs folder."""
+    await bot_instance.load_extension("jishaku")
     for file in os.listdir('./cogs'):
         if file.endswith('.py') and file != '__init__.py':
             cog_name = file[:-3]
@@ -38,7 +39,7 @@ class ReactionLogger(commands.Bot):
     async def setup_hook(self):
         await cog_loader(self)
 
-bot = ReactionLogger(command_prefix=commands.when_mentioned, intents=intents, message_cache_size=1000)
+bot = ReactionLogger(command_prefix="uwu ", intents=intents, message_cache_size=1000)
 
 if __name__ == "__main__":
     bot.run(os.getenv("TOKEN"))
