@@ -18,7 +18,7 @@ class Level(Base):
 
 DATABASE_URL = 'sqlite+aiosqlite:///levels.db'
 
-engine = create_async_engine(DATABASE_URL, echo=True, future=True)
+engine = create_async_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False, future=True)
 
 async def init_db():
@@ -39,5 +39,3 @@ async def update_user_data(guild_id, user_id, xp, level):
         user_data.level = level
         session.add(user_data)
         await session.commit()
-
-asyncio.run(init_db())
