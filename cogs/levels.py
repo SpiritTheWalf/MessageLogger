@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands, tasks
 from datetime import datetime, timedelta, timezone
 import asyncio
-from sqlalchemy import delete
+from sqlalchemy import delete, True_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import sessionmaker
@@ -17,8 +17,8 @@ class LevelingCog(commands.Cog):
         self.last_message_time = {}  # A dictionary to store the last message time for cooldown
         self.channel_id = int(os.getenv("BOT_CID"))
 
-    # Function to get user data from the database
-    async def get_user_data(self, guild_id, user_id):
+    @staticmethod
+    async def get_user_data(guild_id, user_id):
         async with SessionLocal() as session:
             stmt = select(Level).filter(Level.guild_id == guild_id, Level.user_id == user_id)
             result = await session.execute(stmt)
@@ -41,23 +41,31 @@ class LevelingCog(commands.Cog):
             await session.commit()
 
     # Function to calculate level from XP (example formula)
-    def calculate_level(self, xp):
+    @staticmethod
+    def calculate_level(xp):
         # Example formula for level calculation
         return int((xp / 100) ** 0.5) + 1
 
-    # Level up check and XP addition
     async def level_up_check(self, user_data, xp_to_add):
+        """
+        Check if the user levels up and update their XP and level.
+        Handles cases where the user skips multiple levels.
+        """
         new_xp = user_data.xp + xp_to_add
-        new_level = self.calculate_level(new_xp)
+        current_level = user_data.level
 
-        if new_level > user_data.level:  # Level up condition
-            # User leveled up, update their data and send a message
-            await self.update_user_data(user_data.guild_id, user_data.user_id, new_xp, new_level)
+        # Calculate the new level iteratively to handle multiple level-ups
+        new_level = current_level
+        while new_xp >= self.xp_for_level(new_level + 1):
+            new_level += 1
+
+        # Update user data with the new XP and level
+        await self.update_user_data(user_data.guild_id, user_data.user_id, new_xp, new_level)
+
+        # Check if a level-up occurred
+        if new_level > current_level:
             return True, new_level, xp_to_add
-        else:
-            # No level up, just update XP
-            await self.update_user_data(user_data.guild_id, user_data.user_id, new_xp, user_data.level)
-            return False, user_data.level, xp_to_add
+        return False, current_level, xp_to_add
 
     @commands.Cog.listener()
     async def on_message(self, message):
@@ -65,62 +73,105 @@ class LevelingCog(commands.Cog):
             return
 
         # Check if the user is on cooldown (1 minute)
-        current_time = datetime.utcnow()
+        current_time = datetime.now(timezone.utc)
         user_id = message.author.id
         guild_id = message.guild.id
 
-        # Fetch the last time the user earned XP
         last_time = self.last_message_time.get(user_id)
 
         if last_time and current_time - last_time < timedelta(minutes=1):
-            # If within cooldown, return
-            return
+            return  # User is still on cooldown
 
         # Update last message time
         self.last_message_time[user_id] = current_time
 
-        # Get current user data (XP, level)
+        # Get current user data
         user_data = await self.get_user_data(guild_id, user_id)
 
         # Add XP (between 15 and 25)
         xp_to_add = random.randint(15, 25)
 
-        # Check if the user leveled up and return new level and XP
+        # Check for level-up
         leveled_up, new_level, xp_to_add = await self.level_up_check(user_data, xp_to_add)
 
         if leveled_up:
-            # Send a level-up message only if the user leveled up
+            # Notify the user about their level-up
             embed = discord.Embed(
                 title=f"Congratulations {message.author.name}!",
-                description=f"You have leveled up!",
-                color=discord.Color.green()  # You can change this to any color you prefer
+                description="You have leveled up!",
+                color=discord.Color.green()
             )
             embed.add_field(name="New Level", value=f"Level {new_level}", inline=False)
             embed.add_field(name="XP Gained", value=f"+{xp_to_add} XP", inline=False)
             await self.bot.get_channel(self.channel_id).send(embed=embed)
 
+    @staticmethod
+    def xp_for_level(level: int) -> int:
+        """
+        Calculate the total XP required to reach a given level.
+        """
+        return int(100 * level + 25 * level * (level - 1) + 5 * (level - 1) * level * (2 * level - 1) / 6)
+
+    def xp_for_next_level(self, current_level: int) -> int:
+        """
+        Calculate the XP required to progress from the current level to the next.
+        """
+        return self.xp_for_level(current_level + 1) - self.xp_for_level(current_level)
 
     @commands.command()
     async def level(self, ctx, user: discord.Member = None):
-        """Check the user's current level"""
+        """Check the user's current level, rank, and XP details."""
         if user is None:
             user = ctx.author
 
-        user_data = await self.get_user_data(ctx.guild.id, user.id)
+        guild_id = ctx.guild.id
+        user_id = user.id
 
-        # Embed for the level check
-        embed = discord.Embed(
-            title=f"{user.name}'s Level",
-            description=f"Here are your current stats:",
-            color=discord.Color.blue()  # You can change this to any color you prefer
-        )
-        embed.add_field(name="Level", value=f"Level {user_data.level}", inline=False)
-        embed.add_field(name="XP", value=f"{user_data.xp} XP", inline=False)
+        async with SessionLocal() as session:
+            # Fetch user data
+            stmt = select(Level).filter(Level.guild_id == guild_id, Level.user_id == user_id)
+            result = await session.execute(stmt)
+            user_data = result.scalars().first()
 
-        await ctx.send(embed=embed)
+            if not user_data:
+                await ctx.send(f"{user.mention}, you don't have any level data yet!")
+                return
+
+            # Fetch all users in the guild, ordered by XP descending
+            stmt = select(Level).filter(Level.guild_id == guild_id).order_by(Level.xp.desc())
+            result = await session.execute(stmt)
+            all_users = result.scalars().all()
+
+            # Determine rank of the user
+            rank = None
+            for idx, level_entry in enumerate(all_users):
+                if level_entry.user_id == user_id:
+                    rank = idx + 1
+                    break
+
+            if rank is None:
+                await ctx.send("Could not determine your rank.")
+                return
+
+            # Calculate XP for next level
+            xp_next_level = self.xp_for_next_level(user_data.level)
+            xp_remaining = xp_next_level - (user_data.xp - self.xp_for_level(user_data.level))
+
+            # Create the embed
+            embed = discord.Embed(
+                title=f"{user.name}'s Level",
+                description=f"Here are your current stats:",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Rank", value=f"#{rank}", inline=True)
+            embed.add_field(name="Level", value=f"Level {user_data.level}", inline=True)
+            embed.add_field(name="XP", value=f"{user_data.xp} XP", inline=True)
+            embed.add_field(name="XP to Next Level", value=f"{xp_remaining} XP", inline=True)
+
+            await ctx.send(embed=embed)
 
     @commands.command()
-    async def leaderboard(self, ctx):
+    async def topten(self, ctx):
         """Display the leaderboard for the current guild"""
         guild_id = ctx.guild.id
 
@@ -157,7 +208,7 @@ class LevelingCog(commands.Cog):
 
         await ctx.send(embed=embed)
 
-    @commands.command()
+    @commands.command(hidden=True)
     @commands.has_permissions(administrator=True)  # Restrict to administrators (modify as needed)
     async def add_xp(self, ctx, member: discord.Member, xp: int):
         """Manually add XP to a user."""
@@ -187,7 +238,7 @@ class LevelingCog(commands.Cog):
 
         await ctx.send(f"Added {xp} XP to {member.display_name}. They are now Level {user_data.level}!")
 
-    @commands.command()
+    @commands.command(hidden=True)
     @commands.has_permissions(administrator=True)  # Restrict to administrators (modify as needed)
     async def remove_xp(self, ctx, member: discord.Member, xp: int):
         """Manually remove XP from a user."""
@@ -216,8 +267,8 @@ class LevelingCog(commands.Cog):
 
         await ctx.send(f"Removed {xp} XP from {member.display_name}. They are now Level {user_data.level}!")
 
-    @commands.command()
-    @commands.has_permissions(administrator=True)
+    @commands.command(hidden=True)
+    @commands.is_owner()
     async def import_levels(self, ctx):
         """
         Import XP from a Mee6 JSON file provided as an attachment, recalculate levels, and overwrite existing data.
@@ -276,22 +327,118 @@ class LevelingCog(commands.Cog):
         except Exception as e:
             await ctx.send(f"An error occurred: {e}")
 
-    def calculate_level(self, xp: int) -> int:
-        """
-        Calculate the level based on XP using the leveling formula.
-        """
-        level = 0
-        while xp >= self.xp_for_next_level(level):
-            xp -= self.xp_for_next_level(level)
-            level += 1
-        return level
 
-    def xp_for_next_level(self, level: int) -> int:
-        """
-        Calculate the XP required for the next level.
-        Adjust the formula based on your bot's leveling system.
-        """
-        return 5 * (level ** 2) + 50 * level + 100
+    @commands.command()
+    async def leaderboard(self, ctx):
+        """Display the leaderboard of the current server"""
+        guild_id = ctx.guild.id
+        user_id = ctx.author.id
+
+        async with SessionLocal() as session:
+            # Get the user's current level and position
+            stmt = select(Level).filter(Level.guild_id == guild_id, Level.user_id == user_id)
+            result = await session.execute(stmt)
+            user_data = result.scalars().first()
+
+            if not user_data:
+                await ctx.send(f"{ctx.author.mention}, you don't have any level data yet!")
+                return
+
+            # Get all users in the guild ordered by level descending
+            stmt = select(Level).filter(Level.guild_id == guild_id).order_by(Level.level.desc())
+            result = await session.execute(stmt)
+            all_users = result.scalars().all()
+
+            # Find the index of the current user
+            user_position = None
+            for idx, user in enumerate(all_users):
+                if user.user_id == user_id:
+                    user_position = idx
+                    break
+
+            if user_position is None:
+                await ctx.send("Could not find your position in the leaderboard.")
+                return
+
+            # Fetch the 2 users behind the current user, the user, and 7 users ahead of them
+            start_index = max(0, user_position - 8)  # Ensure no negative index
+            end_index = min(len(all_users), user_position + 3)  # Ensure we don't go out of bounds
+            leaderboard = all_users[start_index:end_index]
+
+        # Create the embed to send
+        embed = discord.Embed(
+            title=f"Leaderboard for {ctx.guild.name}",
+            description=f"Here are the users around you in the leaderboard based on level:",
+            color=discord.Color.gold()
+        )
+
+        for idx, user in enumerate(leaderboard):
+            member = ctx.guild.get_member(user.user_id)  # Get the Discord member object
+            username = member.mention if member else "Unknown User"
+
+            # Correct the rank to reflect the user's position in the leaderboard
+            rank = start_index + idx + 1  # Adjust rank accordingly to the slice's starting position
+
+            embed.add_field(
+                name="",
+                value=f"#{rank} {username} Level: {user.level} | XP: {user.xp}",
+                inline=False
+            )
+
+        await ctx.send(embed=embed)
+
+    @commands.command(name="trim_db", hidden=True)
+    @commands.is_owner()
+    async def trim_db(self, ctx):
+        async with SessionLocal() as session:
+            query = select(Level).filter(Level.guild_id == ctx.guild.id)
+            result = await session.execute(query)
+            all_users = result.scalars().all()
+
+            guild_user_ids = {member.id for member in ctx.guild.members}
+            removed_user_ids = []
+
+            for user in all_users:
+                if user.user_id not in guild_user_ids:
+                    user_data = await session.get(Level, (ctx.guild.id, user.user_id))
+                    if user_data:
+                        await session.delete(user_data)
+                        removed_user_ids.append(user.user_id)
+
+            await session.commit()
+
+            header = f"Removed {len(removed_user_ids)} users from the leaderboard.\nUsers removed:\n"
+            max_chunk_size = 2000 - len(header)
+            removed_users_str = "\n".join(map(str, removed_user_ids)) if removed_user_ids else "User not found"
+
+            chunks = []
+            current_chunk = ""
+
+            for user_id in removed_user_ids:
+                user_entry = f"{user_id}\n"
+                if len(current_chunk) + len(user_entry) > max_chunk_size:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = ""
+                current_chunk += user_entry
+
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+
+            if not removed_user_ids:
+                await ctx.send(f"{header}User not found")
+            else:
+                for i, chunk in enumerate(chunks):
+                    if i == 0:
+                        await ctx.send(header + chunk)
+                    else:
+                        await ctx.send(chunk)
+
+    @commands.command(name="users", hidden=True)
+    @commands.is_owner()
+    async def users(self, ctx):
+        from checklen import check
+        num = check()
+        await ctx.send(f"There are {num} users tracked in my database!")
 
 
 # Setup the cog
