@@ -50,7 +50,7 @@ class ReactionLogger(commands.Cog):
     @commands.cooldown(1, 10.0 , commands.BucketType.user)
     async def on_message(self, message: discord.Message):
         if message.content.startswith("<@1311839620161601546>"):
-            await message.reply("I log reactions, nothing else ~~yet~~ :3\n"
+            await message.reply("I log reactions and xp :3\n"
                                 "-# Coded by SpiritTheWalf", mention_author=False)
 
     async def compile_footer_data(self):
