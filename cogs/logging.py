@@ -25,6 +25,7 @@ class ReactionLogger(commands.Cog):
             "action": "added"
         }
         self.reactions.append(reaction_data)
+        self.stats += 1
 
         # Automatically send reactions if the list reaches 50
         if len(self.reactions) >= 25:
@@ -43,6 +44,7 @@ class ReactionLogger(commands.Cog):
             "action": "removed"
         }
         self.reactions.append(reaction_data)
+        self.stats += 1
         if len(self.reactions) >= 25:
             await self.handle_reactions()
 
@@ -88,7 +90,7 @@ class ReactionLogger(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def stats(self, ctx):
         """Send the number of tracked reactions so far."""
-        await ctx.reply(f"I have logged {len(self.reactions)} reactions since last restart!", mention_author=False)
+        await ctx.reply(f"I have logged {self.stats} reactions since last restart!", mention_author=False)
 
     @commands.command(name="send_reactions")
     @commands.has_permissions(administrator=True)
