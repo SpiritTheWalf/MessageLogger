@@ -97,7 +97,7 @@ class LevelingCog(commands.Cog):
         if leveled_up:
             # Notify the user about their level-up
             embed = discord.Embed(
-                title=f"Congratulations {message.author.name}!",
+                title=f"Congratulations {message.author.display_name}!",
                 description="You have leveled up!",
                 color=discord.Color.green()
             )
