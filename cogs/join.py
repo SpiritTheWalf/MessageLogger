@@ -11,7 +11,7 @@ class Join(commands.Cog):
 
     @commands.Cog.listener()
     async def on_member_join(self, member: discord.Member):
-        channel = self.bot.get_channel(int(os.getenv('UNVERIFIED_CHANNEL_ID')))
+        channel = self.bot.get_channel(int(os.getenv('INVMSG_CHANNEL_ID')))
         await channel.send(
             f"Hi there {member.mention}! Thanks for joining the server!\n"
             f"If you react to this message in <#958385865372098610>  "
