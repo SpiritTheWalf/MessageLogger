@@ -79,16 +79,18 @@ class AntiRaid(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
-        if message.author == self.bot.user:
+        if message.author == self.bot.user: # Stops the bot from getting muted
             return
-        elif message.author == discord.User.bot:
+        elif isinstance(message.author, discord.User): # If a member is not in the server
             return
-        if self.moderator_role in message.author.roles:
+        elif isinstance(message.author, discord.Member) and message.author.bot: # If the member is a bot
             return
-        if not message.author.id == 1323099192368955433:
+        if self.moderator_role in message.author.roles: # If a member is a moderator
             return
-        #if message.channel.category_id == 958386788085407794:
-           # return
+        if message.channel.category_id == 958386788085407794: # Admin chats
+            return
+        if isinstance(message.channel, discord.DMChannel): # Dms
+            return
 
         now = datetime.now(timezone.utc)
         user_id = message.author.id
@@ -121,6 +123,9 @@ class AntiRaid(commands.Cog):
                 message_cache[user_id] = []
                 warned_users.pop(user_id, None)
                 cooldown_cache[user_id] = now
+
+        if len(message.mentions) >= 4:
+            await message.channel.send("Please stop spamming mentions or you may be muted")
 
 
 
